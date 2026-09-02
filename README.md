@@ -25,7 +25,8 @@ Root My Pixel lets you *temporarily* gain root access with ReSukiSU in just one 
 4. **KernelSU / ReSukiSU Integration**
    - Staging of the `ksud` binary matching the device's Kernel Module Interface (KMI, e.g., `android15-6.6`).
    - The app triggers the KernelSU **late-load** mechanism (`ksud late-load --kmi <kmi>`).
-   - Verifies KernelSU active status by probing kernel device nodes (`/dev/kernelsu`, `/sys/kernel/kernelsu`, `/data/adb/ksu`).
+   - Verifies KernelSU through its UAPI, with `ksud debug info` and `/proc/modules` as compatibility fallbacks.
+   - Registers the installed ReSukiSU Manager only after validating its production APK signature.
 
 5. **User Interface & Management Tools**
    - Real-time live log progress monitoring.
@@ -41,7 +42,7 @@ Root My Pixel lets you *temporarily* gain root access with ReSukiSU in just one 
 | **Pixel 10 Pro**      | `blazer`   | `CP2A.260705.006` | `android15-6.6` | ✅      |
 | **Pixel 10 Pro XL**   | `mustang`  | `CP2A.260705.006` | `android15-6.6` | ✅      |
 | **Pixel 10 Pro Fold** | `rango`    | `CP2A.260705.006` | `android15-6.6` | ✅      |
-| **Pixel 10a**         | `stallion` | `CP2A.260705.006` | `android15-6.6` | ⏳      |
+| **Pixel 10a**         | `stallion` | `CP2A.260705.006`<br>`CP2A.260805.005` | `android14-6.1` | ✅      |
 | **Pixel 9 Pro Fold**  | `comet`    | `CP2A.260705.006` | `android15-6.1` | ✅      |
 | **Pixel 9 Pro**       | `caiman`   | `CP2A.260705.006` | `android15-6.1` | ✅      |
 | **Pixel 9 Pro XL**    | `komodo`   | `CP2A.260705.006` | `android15-6.1` | ✅      |
@@ -52,10 +53,11 @@ Root My Pixel lets you *temporarily* gain root access with ReSukiSU in just one 
 | **Pixel 8a**          | `akita`    | `CP2A.260805.005` | `android14-6.1` | ✅      |
 | **Pixel 7a**          | `lynx`     | `CP2A.260705.006` | `android14-6.1` | ✅      |
 | **Pixel 7 Pro**       | `cheetah`  | `CP2A.260705.006` | `android14-6.1` | ✅      |
-| **Pixel 7**           | `panther`  | `CP2A.260705.006` | `android14-6.1` | ✅      |
+| **Pixel 7**           | `panther`  | `CP2A.260705.006`<br>`BP2A.250705.008` | `android14-6.1` | ✅      |
 | **Pixel 6a**          | `bluejay`  | `CP2A.260705.006`<br>`CP1A.260405.005` | `android14-6.1` | ✅      |
 | **Pixel 6**           | `oriole`   | `CP2A.260705.006` | `android14-6.1` | ✅      |
 | **Pixel 6 Pro**       | `raven`    | `CP2A.260705.006` | `android14-6.1` | ✅      |
+| **Pixel Tablet**      | `tangorpro`| `BP1A.250405.007` | `android14-6.1` | ✅      |
 
 ---
 
@@ -88,6 +90,8 @@ To install it on a connected device via ADB:
 ```bash
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+⚠️ Keep in mind that the exploit does not have a 100% success rate. Many users have had to try more than 20 times. Many report higher success by opening the app immediately after a reboot, while others find better results 10–40 minutes after rebooting.
 
 ---
 

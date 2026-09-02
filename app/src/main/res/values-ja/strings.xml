@@ -27,12 +27,35 @@
     <!-- Actions -->
     <string name="action_install">ReSukiSU をインストール</string>
     <string name="action_reinstall">ReSukiSU を再インストール</string>
+    <string name="action_unroot">root 権限を削除して再起動</string>
     <string name="action_retry">再試行</string>
     <string name="action_close">閉じる</string>
     <string name="action_done">完了</string>
     <string name="action_soft_reboot">ソフト再起動（ユーザー空間）</string>
     <string name="action_export_log">exploit.log を書き出す</string>
     <string name="action_copy_log">ログをコピー</string>
+    <string name="action_confirm_unroot">削除して再起動</string>
+    <string name="action_cancel">キャンセル</string>
+    <string name="unroot_dialog_title">root 権限を削除しますか？</string>
+    <string name="unroot_dialog_message">一時 exploit ファイル、KernelSU のデータ (/data/adb) を削除し、端末を再起動して純正カーネル状態に戻します。</string>
+    <string name="status_unrooting">クリーンアップと再起動中…</string>
+    <string name="status_unroot_incomplete">クリーンアップ未完了 — 操作を選択してください</string>
+    <string name="unroot_incomplete_title">削除できなかった項目があります</string>
+    <string name="unroot_incomplete_message">次のクリーンアップ操作に失敗しました：</string>
+    <string name="unroot_temporary_root_reboot_note">このまま安全に再起動できます。この exploit が提供する root 権限は一時的なため、再起動後に root 権限は失われます。ただし、上記の項目はストレージに残る場合があります。</string>
+    <string name="action_reboot_anyway">このまま再起動</string>
+    <string name="action_do_not_reboot">再起動しない</string>
+    <string name="unroot_issue_root_transport">特権クリーンアップへのアクセスを利用できませんでした</string>
+    <string name="unroot_issue_data_adb">KernelSU データ（/data/adb）</string>
+    <string name="unroot_issue_apex_mount">一時 Virt APEX マウント</string>
+    <string name="unroot_issue_selinux">SELinux enforcing モード</string>
+    <string name="unroot_issue_cve_app">Exploit ペイロード</string>
+    <string name="unroot_issue_cve_root">Root ヘルパー</string>
+    <string name="unroot_issue_ksud">ReSukiSU ローダー</string>
+    <string name="unroot_issue_exploit_logs">Exploit の一時ログ</string>
+    <string name="unroot_issue_root_transport_files">一時 root クライアントとソケット</string>
+    <string name="unroot_issue_reboot">システム再起動要求</string>
+    <string name="unroot_issue_unknown">クリーンアップ状態を確認できませんでした</string>
     <string name="copied_to_clipboard">ログをクリップボードにコピーしました</string>
 
     <!-- Install screen -->
@@ -81,7 +104,7 @@
     <string name="error_payload_exit">exploit が終了コード %1$d で終了しました%2$s</string>
     <string name="error_success_marker">exploit が成功を報告しませんでした</string>
     <string name="error_ksu_stage">ksud の配置に失敗しました: %1$s</string>
-    <string name="error_ksu_verify">ReSukiSU のローダーが失敗しました (%1$d): %2$s</string>
+    <string name="error_ksu_verify">late-load 後の ReSukiSU 検証に失敗しました (終了コード %1$d): %2$s</string>
     <string name="error_shizuku_required">Shizuku が必要です。Google Play から Shizuku をインストールし、Root My Pixel に権限を許可してください。</string>
     <string name="error_boot_id">boot ID を読み取れません</string>
     <string name="error_receipt">インストール記録を保存できません</string>

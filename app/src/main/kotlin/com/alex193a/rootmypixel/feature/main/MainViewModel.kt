@@ -1,12 +1,13 @@
 package com.alex193a.rootmypixel.feature.main
 
 import android.app.Application
-import android.content.Context
+import android.content.ComponentName
 import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
-import android.os.Process
 import android.os.SystemClock
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
@@ -16,12 +17,18 @@ import com.alex193a.rootmypixel.core.Result
 import com.alex193a.rootmypixel.domain.model.DeviceSnapshot
 import com.alex193a.rootmypixel.domain.model.InstallPhase
 import com.alex193a.rootmypixel.domain.model.InstallUiState
+import com.alex193a.rootmypixel.domain.model.UnrootWarningUi
 import com.alex193a.rootmypixel.domain.usecase.ResolveTargetUseCase
 import com.alex193a.rootmypixel.feature.install.InstallActivity
+import com.alex193a.rootmypixel.shizuku.ExploitService
+import com.alex193a.rootmypixel.shizuku.IExploitService
 import com.alex193a.rootmypixel.utils.NativeProbe
+import com.alex193a.rootmypixel.utils.UnrootCommandOutcome
+import com.alex193a.rootmypixel.utils.UnrootIssue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,6 +36,8 @@ import kotlinx.coroutines.launch
 import org.koin.java.KoinJavaComponent.get
 import rikka.shizuku.Shizuku
 import java.io.File
+import java.util.concurrent.TimeUnit
+import kotlin.time.Duration.Companion.milliseconds
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application
@@ -111,13 +120,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 mutableReSukiSuInstalled.value = app.packageManager
                     .getLaunchIntentForPackage("com.resukisu.resukisu") != null
+                val kernelSuStatus = NativeProbe.kernelSuStatus()
                 val probe = NativeProbe.run()
-                if (NativeProbe.isKernelSuActive()) {
+                if (kernelSuStatus.isActive) {
                     mutableState.value = InstallUiState(
                         phase = InstallPhase.Installed,
                         message = app.getString(R.string.status_ksu_active),
                         probeOutput = probe,
-                        log = probe,
+                        log = "$probe\nKernelSU UAPI root-profile grant for this app: " +
+                                "${kernelSuStatus.appRootGranted}",
                     )
                     return@launch
                 }
@@ -214,8 +225,244 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         app.startActivity(chooserIntent)
     }
 
+    private data class ShizukuServiceHandle(
+        val service: IExploitService,
+        val conn: ServiceConnection,
+    )
+
+    @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+    private fun bindExploitService(): ShizukuServiceHandle? {
+        val args = Shizuku.UserServiceArgs(
+            ComponentName(app.packageName, ExploitService::class.java.name)
+        )
+            .daemon(false)
+            .processNameSuffix("exploit_service")
+            .version(1)
+
+        var service: IExploitService? = null
+        val conn = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+                service = IExploitService.Stub.asInterface(binder)
+                synchronized(this) {
+                    (this as Object).notifyAll()
+                }
+            }
+
+            override fun onServiceDisconnected(name: ComponentName?) {
+                service = null
+            }
+        }
+
+        Shizuku.bindUserService(args, conn)
+
+        synchronized(conn as Object) {
+            if (service == null) {
+                try {
+                    (conn as Object).wait(5000)
+                } catch (_: InterruptedException) {
+                }
+            }
+        }
+
+        val svc = service ?: run {
+            Shizuku.unbindUserService(args, conn, true)
+            return null
+        }
+        return ShizukuServiceHandle(svc, conn)
+    }
+
+    private fun unbindExploitService(handle: ShizukuServiceHandle) {
+        val args = Shizuku.UserServiceArgs(
+            ComponentName(app.packageName, ExploitService::class.java.name)
+        )
+            .daemon(false)
+            .processNameSuffix("exploit_service")
+            .version(1)
+        Shizuku.unbindUserService(args, handle.conn, true)
+    }
+
+    fun unrootAndReboot() {
+        if (mutableState.value.busy) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            mutableState.value = mutableState.value.copy(
+                phase = InstallPhase.Checking,
+                message = app.getString(R.string.status_unrooting),
+                unrootWarning = null,
+            )
+            appendUnrootLog("[*] Starting verified unroot cleanup...")
+
+            val script = runCatching {
+                app.assets.open("unroot.sh").bufferedReader().use { it.readText() }
+            }.getOrElse {
+                showUnrootWarning(listOf(UnrootIssue.Unknown))
+                return@launch
+            }
+
+            val outcome = executeUnrootScript(script)
+            if (outcome.cleanupComplete && outcome.rebootRequested) {
+                appendUnrootLog("[+] Cleanup complete; reboot requested")
+                delay(3000.milliseconds)
+                refresh()
+            } else {
+                val issues = outcome.issues.toMutableList()
+                if (outcome.cleanupComplete && !outcome.rebootRequested) {
+                    issues += UnrootIssue.Reboot
+                }
+                showUnrootWarning(issues)
+            }
+        }
+    }
+
+    fun continueUnrootReboot() {
+        if (mutableState.value.unrootWarning == null) return
+        viewModelScope.launch(Dispatchers.IO) {
+            mutableState.value = mutableState.value.copy(
+                phase = InstallPhase.Checking,
+                message = app.getString(R.string.status_unrooting),
+                unrootWarning = null,
+            )
+            appendUnrootLog("[*] User requested reboot despite incomplete cleanup")
+            if (!requestReboot()) {
+                showUnrootWarning(listOf(UnrootIssue.Reboot))
+            }
+        }
+    }
+
+    fun cancelUnrootReboot() {
+        mutableState.value = mutableState.value.copy(
+            phase = InstallPhase.Installed,
+            message = app.getString(R.string.status_unroot_incomplete),
+            unrootWarning = null,
+        )
+        appendUnrootLog("[*] Reboot cancelled by user")
+    }
+
+    private fun executeUnrootScript(script: String): UnrootCommandOutcome {
+        val helper = File(app.applicationInfo.nativeLibraryDir, "libcve43499root.so")
+        fun parseAttempt(transport: String, output: String): UnrootCommandOutcome? {
+            val outcome = UnrootCommandOutcome.parse(output)
+            appendUnrootLog("[*] $transport output:\n${output.ifBlank { "no output" }}")
+            return if (outcome.cleanupComplete ||
+                (outcome.hasStructuredOutput && !outcome.transportUnavailable)
+            ) outcome else null
+        }
+
+        runCatching { runCommand(listOf("su", "-c", script)).output }
+            .getOrNull()
+            ?.let { parseAttempt("su", it) }
+            ?.let { return it }
+
+        if (helper.exists()) {
+            runCatching { runCommand(listOf(helper.absolutePath, "-c", script)).output }
+                .getOrNull()
+                ?.let { parseAttempt("CVE helper", it) }
+                ?.let { return it }
+        }
+
+        if (isShizukuShellActive()) {
+            val handle = runCatching { bindExploitService() }.getOrNull()
+            if (handle != null) {
+                try {
+                    parseAttempt("Shizuku", handle.service.exec(script))?.let { return it }
+                } catch (error: Exception) {
+                    appendUnrootLog("[-] Shizuku unroot error: ${error.message}")
+                } finally {
+                    unbindExploitService(handle)
+                }
+            }
+        }
+
+        return UnrootCommandOutcome(
+            cleanupComplete = false,
+            rebootRequested = false,
+            transportUnavailable = true,
+            issues = UnrootIssue.affectedByMissingTransport,
+            hasStructuredOutput = true,
+        )
+    }
+
+    private fun requestReboot(): Boolean {
+        val helper = File(app.applicationInfo.nativeLibraryDir, "libcve43499root.so")
+        val commands = buildList {
+            add(listOf("su", "-c", REBOOT_COMMAND))
+            if (helper.exists()) add(listOf(helper.absolutePath, "-c", REBOOT_COMMAND))
+        }
+        commands.forEach { command ->
+            val output = runCatching { runCommand(command).output }.getOrDefault("")
+            appendUnrootLog("[*] Reboot attempt: ${output.ifBlank { "no output" }}")
+            if (output.contains("UNROOT_REBOOT_REQUESTED")) return true
+        }
+
+        if (isShizukuShellActive()) {
+            val handle = runCatching { bindExploitService() }.getOrNull() ?: return false
+            try {
+                val output = handle.service.exec(REBOOT_COMMAND)
+                appendUnrootLog("[*] Shizuku reboot attempt: $output")
+                return output.contains("UNROOT_REBOOT_REQUESTED")
+            } catch (error: Exception) {
+                appendUnrootLog("[-] Shizuku reboot error: ${error.message}")
+            } finally {
+                unbindExploitService(handle)
+            }
+        }
+        return false
+    }
+
+    private fun isShizukuShellActive(): Boolean = try {
+        Shizuku.pingBinder() &&
+                Shizuku.isPreV11().not() &&
+                Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED &&
+                Shizuku.getUid() == 2000
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun runCommand(command: List<String>): CommandResult {
+        val process = ProcessBuilder(command).redirectErrorStream(true).start()
+        val finished = process.waitFor(COMMAND_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        if (!finished) {
+            process.destroyForcibly()
+            process.waitFor()
+        }
+        return CommandResult(
+            code = if (finished) process.exitValue() else COMMAND_TIMEOUT_CODE,
+            output = process.inputStream.bufferedReader().use { it.readText() }.trim(),
+        )
+    }
+
+    private fun showUnrootWarning(issues: List<UnrootIssue>) {
+        val outcome = UnrootCommandOutcome(
+            cleanupComplete = false,
+            rebootRequested = false,
+            transportUnavailable = UnrootIssue.RootTransport in issues,
+            issues = issues.distinct(),
+            hasStructuredOutput = true,
+        )
+        mutableState.value = mutableState.value.copy(
+            phase = InstallPhase.Installed,
+            message = app.getString(R.string.status_unroot_incomplete),
+            unrootWarning = UnrootWarningUi(outcome.failedItemsText(app)),
+        )
+        appendUnrootLog("[!] Cleanup incomplete:\n${outcome.failedItemsText(app)}")
+    }
+
+    private fun appendUnrootLog(message: String) {
+        android.util.Log.i("RootMyPixel", "[unroot] $message")
+        mutableState.value = mutableState.value.copy(
+            log = (mutableState.value.log + "\n" + message).trim(),
+        )
+    }
+
     companion object {
         private const val SHIZUKU_PERMISSION_CODE = 101
         private const val UPTIME_THRESHOLD_MS = 5 * 60 * 1000L // 5 minutes
+        private const val COMMAND_TIMEOUT_SECONDS = 90L
+        private const val COMMAND_TIMEOUT_CODE = 124
+        private const val REBOOT_COMMAND =
+            "sync; if svc power reboot || reboot; then " +
+                    "echo UNROOT_REBOOT_REQUESTED; else echo UNROOT_FAIL:reboot:${'$'}?; fi"
     }
+
+    private data class CommandResult(val code: Int, val output: String)
 }

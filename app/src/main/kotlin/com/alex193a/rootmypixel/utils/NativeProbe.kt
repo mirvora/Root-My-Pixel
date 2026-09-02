@@ -16,14 +16,67 @@ object NativeProbe {
      */
     external fun run(): String
 
+    /** Returns the KernelSU driver status obtained through the official supercall UAPI. */
+    external fun getKernelSuInfoNative(): String
+
     /**
-     * Check if ReSukiSU is currently active on the device.
+     * Check if KernelSU/ReSukiSU is active via kernel driver syscall in a fork-isolated process.
+     * Kept for callers that only require a Boolean.
      */
-    fun isKernelSuActive(): Boolean {
-        return File("/dev/kernelsu").exists() ||
-            File("/sys/kernel/kernelsu").exists() ||
-            File("/data/adb/ksu").exists() ||
-            File("/data/adb/ksu/bin/ksu").exists()
+    external fun isKernelSuActiveNative(): Boolean
+
+    /**
+     * Check the actual KernelSU/ReSukiSU kernel driver. This deliberately does
+     * not treat `su`, a temporary CVE daemon, or filesystem paths as proof that
+     * KernelSU is loaded.
+     */
+    fun kernelSuStatus(): KernelSuStatus =
+        runCatching { KernelSuStatus.parse(getKernelSuInfoNative()) }
+            .getOrDefault(KernelSuStatus())
+
+    fun isKernelSuActive(): Boolean = kernelSuStatus().isActive
+
+    data class KernelSuStatus(
+        val probeCompleted: Boolean = false,
+        val driverPresent: Boolean = false,
+        val driverResponsive: Boolean = false,
+        val appRootGranted: Boolean = false,
+        val version: UInt = 0u,
+        val flags: UInt = 0u,
+        val features: UInt = 0u,
+        val uapiVersion: UInt = 0u,
+    ) {
+        val isActive: Boolean
+            get() = probeCompleted && driverPresent && driverResponsive && version > 0u
+
+        val isLateLoad: Boolean
+            get() = flags and FLAG_LATE_LOAD != 0u
+
+        companion object {
+            private val FLAG_LATE_LOAD: UInt = 1u shl 2
+
+            fun parse(raw: String): KernelSuStatus {
+                val values = raw.split(';')
+                    .mapNotNull { entry ->
+                        entry.split('=', limit = 2).takeIf { it.size == 2 }
+                    }
+                    .associate { (key, value) -> key to value }
+
+                fun boolean(key: String) = values[key] == "1"
+                fun unsigned(key: String) = values[key]?.toUIntOrNull() ?: 0u
+
+                return KernelSuStatus(
+                    probeCompleted = boolean("probe"),
+                    driverPresent = boolean("present"),
+                    driverResponsive = boolean("responsive"),
+                    appRootGranted = boolean("granted"),
+                    version = unsigned("version"),
+                    flags = unsigned("flags"),
+                    features = unsigned("features"),
+                    uapiVersion = unsigned("uapi"),
+                )
+            }
+        }
     }
 
     /**
